@@ -26,7 +26,7 @@ const config = {
       delay: 5000
     },
     movement: {
-      enabled: false, // Eğer botun doğduğu yerde kalmasını istiyorsan false yap, belirli koordinata gitsin dersen true yapıp altı doldur
+      enabled: false,
       coordinates: {
         x: 0, 
         y: 64,
@@ -34,11 +34,7 @@ const config = {
       }
     },
     antiAFK: {
-      enabled: true,
-      jump: true,      // Zıplama aktif
-      sneak: true,     // Eğilip kalkma aktif (daha gerçekçi durur)
-      look: true,      // Etrafa bakınma aktif
-      interval: 4000   // 4 saniyede bir bu hareketleri tekrarlar (AFK kalmaz)
+      enabled: true
     },
     chatMessages: {
       enabled: false,
@@ -75,6 +71,103 @@ let serverJoined = false;
 let authmeCompleted = false;
 const maxLoginAttempts = 3;
 
+// -------------------------------------------------------------
+// GELİŞMİŞ ANTI-AFK: RASGELE ZIPLAMA + BAKMA + SAĞ TIK
+// -------------------------------------------------------------
+function startAntiAFK() {
+  console.log('🎯 Gelişmiş Anti-AFK başlatıldı (Zıplama / Bakma / Sağ Tık)');
+
+  // --- 1. RASGELE ZIPLAMA: 1-2 saniyede bir ---
+  setInterval(() => {
+    if (!bot || !bot._client || bot._client.state !== 'play') return;
+    try {
+      bot.setControlState('jump', true);
+      setTimeout(() => {
+        if (bot && bot.setControlState) bot.setControlState('jump', false);
+      }, 250 + Math.random() * 150); // 250-400ms basılı tutar
+      console.log('⬆️  Zıpladı');
+    } catch (e) {
+      console.log('⚠️ Zıplama hatası:', e.message);
+    }
+  }, 1000 + Math.random() * 1000); // 1000-2000ms aralıkta, ama sabit kalmasın
+
+  // Sabit aralık yerine tekrar eden rasgele zamanlayıcı kullan
+  function scheduleJump() {
+    const delay = 1000 + Math.floor(Math.random() * 1000); // 1-2 saniye
+    setTimeout(() => {
+      if (!bot || !bot._client || bot._client.state !== 'play') {
+        scheduleJump();
+        return;
+      }
+      try {
+        bot.setControlState('jump', true);
+        setTimeout(() => {
+          if (bot && bot.setControlState) bot.setControlState('jump', false);
+        }, 200 + Math.floor(Math.random() * 200));
+        console.log(`⬆️  Zıpladı (sonraki: ${delay}ms)`);
+      } catch (e) {
+        console.log('⚠️ Zıplama hatası:', e.message);
+      }
+      scheduleJump();
+    }, delay);
+  }
+
+  // --- 2. RASGELE YÖNE BAKMA: 1-2 saniyede bir ---
+  function scheduleLook() {
+    const delay = 1000 + Math.floor(Math.random() * 1000); // 1-2 saniye
+    setTimeout(() => {
+      if (!bot || !bot._client || bot._client.state !== 'play') {
+        scheduleLook();
+        return;
+      }
+      try {
+        const yaw   = (Math.random() * 2 - 1) * Math.PI;       // -180 ile +180 derece
+        const pitch = (Math.random() * 0.8 - 0.4) * Math.PI;  // Yukarı/aşağı hafif bak
+        bot.look(yaw, pitch, true);
+        console.log(`👀 Baktı (yaw: ${(yaw * 180 / Math.PI).toFixed(0)}°, pitch: ${(pitch * 180 / Math.PI).toFixed(0)}°)`);
+      } catch (e) {
+        console.log('⚠️ Bakma hatası:', e.message);
+      }
+      scheduleLook();
+    }, delay);
+  }
+
+  // --- 3. BAKTIGI YÖNE SAĞ TIK (swing/interact): 5-10 saniyede bir ---
+  // Bloğu kırmaz, sadece "kullan" tuşuna basar (sağ klik)
+  function scheduleInteract() {
+    const delay = 5000 + Math.floor(Math.random() * 5000); // 5-10 saniye
+    setTimeout(() => {
+      if (!bot || !bot._client || bot._client.state !== 'play') {
+        scheduleInteract();
+        return;
+      }
+      try {
+        // Botun baktığı yöndeki bloğu bul
+        const block = bot.blockAtCursor(4); // 4 blok menzil
+        if (block) {
+          // Sağ tık (activate/interact) - kırmaz, sadece dokunur
+          bot.activateBlock(block);
+          console.log(`🖱️  Sağ tık: ${block.name} (${block.position})`);
+        } else {
+          // Karşıda blok yoksa havaya swing yap (el sallama animasyonu)
+          bot.swingArm();
+          console.log('🖱️  Sağ tık: Karşıda blok yok, el sallandı');
+        }
+      } catch (e) {
+        // Hata olursa sadece el sallar, sunucuya zarar vermez
+        try { bot.swingArm(); } catch (_) {}
+        console.log('⚠️ Interact hatası (el sallandı):', e.message);
+      }
+      scheduleInteract();
+    }, delay);
+  }
+
+  scheduleJump();
+  scheduleLook();
+  scheduleInteract();
+}
+// -------------------------------------------------------------
+
 function createBot() {
   console.log('🤖 Creating bot...');
   
@@ -96,7 +189,6 @@ function createBot() {
   }
 
   bot = mineflayer.createBot(botOptions);
-
   bot.loadPlugin(pathfinder);
 
   bot.once('spawn', () => {
@@ -121,11 +213,10 @@ function createBot() {
     }, 3000);
   });
 
-  bot.on('chat', (username, message, translate, jsonMsg, matches) => {
+  bot.on('chat', (username, message) => {
     if (config.features.chatLog.enabled && username !== bot.username) {
       console.log(`💬 [${username}] ${message}`);
     }
-
     if (username === bot.username) return;
 
     const lowerMessage = message.toLowerCase();
@@ -145,37 +236,27 @@ function createBot() {
         bot.chat(`/register ${password} ${password}`);
         console.log('📝 Sent registration command');
       }, 1500);
-    }
-    
-    else if ((lowerMessage.includes('login') || lowerMessage.includes('log in')) && 
-             (lowerMessage.includes('password') || lowerMessage.includes('/login') || lowerMessage.includes('command'))) {
+    } else if ((lowerMessage.includes('login') || lowerMessage.includes('log in')) && 
+               (lowerMessage.includes('password') || lowerMessage.includes('/login') || lowerMessage.includes('command'))) {
       console.log('🔑 Login required detected');
       setTimeout(() => {
         bot.chat(`/login ${config.bot.authmePassword}`);
         console.log('🔓 Sent login command');
         loginAttempts++;
       }, 1500);
-    }
-    
-    else if ((lowerMessage.includes('successfully') || lowerMessage.includes('welcome') || lowerMessage.includes('logged')) && 
-             (lowerMessage.includes('logged') || lowerMessage.includes('registered') || lowerMessage.includes('authenticated'))) {
+    } else if ((lowerMessage.includes('successfully') || lowerMessage.includes('welcome') || lowerMessage.includes('logged')) && 
+               (lowerMessage.includes('logged') || lowerMessage.includes('registered') || lowerMessage.includes('authenticated'))) {
       console.log('✅ AuthMe authentication successful!');
       isAuthenticated = true;
       authmeCompleted = true;
       
       if (config.serverCommands.enabled && config.serverCommands.joinServer) {
         console.log('📋 Step 2: AuthMe completed, now joining survival server...');
-        setTimeout(() => {
-          joinSpecificServer();
-        }, config.serverCommands.delay);
+        setTimeout(() => { joinSpecificServer(); }, config.serverCommands.delay);
       } else {
         setTimeout(startBotActivities, 2000);
       }
-    }
-    
-    else if (lowerMessage.includes('wrong password') || 
-             lowerMessage.includes('incorrect password') || 
-             lowerMessage.includes('invalid password')) {
+    } else if (lowerMessage.includes('wrong password') || lowerMessage.includes('incorrect password') || lowerMessage.includes('invalid password')) {
       console.log('❌ AuthMe login failed - wrong password');
       if (loginAttempts < maxLoginAttempts) {
         console.log(`🔄 Retrying login (${loginAttempts}/${maxLoginAttempts})...`);
@@ -186,36 +267,22 @@ function createBot() {
       } else {
         console.log('🚫 Max login attempts reached');
       }
-    }
-    
-    else if (lowerMessage.includes('timeout') || 
-             (lowerMessage.includes('time') && lowerMessage.includes('up')) ||
-             lowerMessage.includes('too slow')) {
+    } else if (lowerMessage.includes('timeout') || (lowerMessage.includes('time') && lowerMessage.includes('up')) || lowerMessage.includes('too slow')) {
       console.log('⏰ AuthMe timeout detected');
-      if (!authmeCompleted) {
-        setTimeout(attemptAuthMeLogin, 2000);
-      }
-    }
-
-    else if (lowerMessage.includes('already') && lowerMessage.includes('registered')) {
+      if (!authmeCompleted) setTimeout(attemptAuthMeLogin, 2000);
+    } else if (lowerMessage.includes('already') && lowerMessage.includes('registered')) {
       console.log('ℹ️ Already registered, attempting login...');
       setTimeout(() => {
         bot.chat(`/login ${config.bot.authmePassword}`);
         console.log('🔓 Sent login command after registration notice');
       }, 1500);
-    }
-
-    else if (lowerMessage.includes('not authenticated') || lowerMessage.includes('please login')) {
+    } else if (lowerMessage.includes('not authenticated') || lowerMessage.includes('please login')) {
       console.log('⚠️ Authentication required message detected');
-      if (!authmeCompleted) {
-        setTimeout(attemptAuthMeLogin, 1000);
-      }
+      if (!authmeCompleted) setTimeout(attemptAuthMeLogin, 1000);
     }
   });
 
-  bot.on('error', (err) => {
-    console.error('❌ Bot error:', err.message);
-  });
+  bot.on('error', (err) => { console.error('❌ Bot error:', err.message); });
 
   bot.on('kicked', (reason) => {
     console.log('⚠️ Bot was kicked:', reason);
@@ -236,26 +303,13 @@ function createBot() {
   bot.on('death', () => {
     console.log('💀 Bot died and respawned');
     setTimeout(() => {
-      if (authmeCompleted && serverJoined) {
-        startBotActivities();
-      } else if (authmeCompleted && !serverJoined) {
-        joinSpecificServer();
-      } else {
-        attemptAuthMeLogin();
-      }
+      if (authmeCompleted && serverJoined) startBotActivities();
+      else if (authmeCompleted && !serverJoined) joinSpecificServer();
+      else attemptAuthMeLogin();
     }, 3000);
   });
 
-  bot.on('goal_reached', () => {
-    console.log('🎯 Reached target location!');
-  });
-
-  bot.on('path_update', (r) => {
-    if (r && r.visitedNodes && r.time) {
-      const nodesPerTick = (r.visitedNodes * 50 / r.time).toFixed(2);
-      console.log(`🗺️ Pathfinding: ${r.visitedNodes} nodes, ${nodesPerTick} nodes/s, ${r.time.toFixed(2)} ms`);
-    }
-  });
+  bot.on('goal_reached', () => { console.log('🎯 Reached target location!'); });
 
   return bot;
 }
@@ -275,7 +329,6 @@ function joinSpecificServer() {
 
 function attemptAuthMeLogin() {
   if (authmeCompleted) return;
-
   console.log('🔐 Attempting AuthMe authentication...');
   
   setTimeout(() => {
@@ -293,7 +346,6 @@ function attemptAuthMeLogin() {
       console.log('⚠️ No AuthMe response, proceeding to activities...');
       isAuthenticated = true;
       authmeCompleted = true;
-      
       if (config.serverCommands.enabled && config.serverCommands.joinServer) {
         setTimeout(() => { joinSpecificServer(); }, config.serverCommands.delay);
       } else {
@@ -305,7 +357,6 @@ function attemptAuthMeLogin() {
 
 function startBotActivities() {
   if (!authmeCompleted) return;
-  
   console.log('🎮 Starting bot activities on survival server...');
   
   if (config.features.movement.enabled) {
@@ -320,7 +371,6 @@ function startBotActivities() {
   }
 
   if (config.features.antiAFK.enabled) {
-    console.log('🎯 Starting anti-AFK activities');
     startAntiAFK();
   }
 
@@ -329,45 +379,9 @@ function startBotActivities() {
   }
 }
 
-function startAntiAFK() {
-  const antiAfkConfig = config.features.antiAFK;
-  
-  setInterval(() => {
-    if (!bot || !bot._client || bot._client.state !== 'play') return;
-    
-    try {
-      if (antiAfkConfig.jump) {
-        bot.setControlState('jump', true);
-        setTimeout(() => {
-          if (bot && bot.setControlState) bot.setControlState('jump', false);
-        }, 300);
-      }
-      
-      if (antiAfkConfig.sneak) {
-        bot.setControlState('sneak', true);
-        setTimeout(() => {
-          if (bot && bot.setControlState) bot.setControlState('sneak', false);
-        }, 300);
-      }
-      
-      if (antiAfkConfig.look) {
-        const yaw = (Math.random() - 0.5) * Math.PI;
-        const pitch = (Math.random() - 0.5) * Math.PI / 2;
-        bot.look(yaw, pitch);
-      }
-      
-      console.log('🔄 Anti-AFK actions performed (Jump/Sneak/Look)');
-    } catch (error) {
-      console.log('⚠️ Anti-AFK error:', error.message);
-    }
-  // Süreyi config'den (yani 4 saniyeden) alıyor
-  }, antiAfkConfig.interval);
-}
-
 function startChatMessages() {
   const chatConfig = config.features.chatMessages;
   let messageIndex = 0;
-  
   setInterval(() => {
     if (!bot || !bot._client || bot._client.state !== 'play') return;
     try {
@@ -383,8 +397,7 @@ function startChatMessages() {
 
 createBot();
 
-// Kapatma sinyalleri yönetimi
-process.on('SIGINT', () => { if (bot) bot.quit(); process.exit(0); });
+process.on('SIGINT',  () => { if (bot) bot.quit(); process.exit(0); });
 process.on('SIGTERM', () => { if (bot) bot.quit(); process.exit(0); });
 process.on('uncaughtException', (err) => {
   console.error('💥 Uncaught Exception:', err.message);
