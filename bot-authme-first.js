@@ -10,7 +10,7 @@ const config = {
     version: '1.20.1'           // Sunucu sürümün
   },
   bot: {
-    username: 'ilk_bot',        // Botunun adı
+    username: 'ilk_bot15',        // Botunun adı
     auth: 'offline', 
     password: '', 
     authmePassword: 'SifreniziBurayaYazin' // Sunucuda kayıt/giriş yaparken kullanılacak şifre
